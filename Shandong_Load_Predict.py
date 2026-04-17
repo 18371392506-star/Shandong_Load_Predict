@@ -63,7 +63,7 @@ uploaded_power_files = st.sidebar.file_uploader(
 )
 
 uploaded_weather = st.sidebar.file_uploader(
-    "2) 上传气象数据文档（含历史与未来，表头：record_time, value）",
+    "2) 上传气象数据文档（含历史与未来，表头：record_time, value, city_name, weather_dimension）",
     type=["xlsx", "xls", "csv"]
 )
 
@@ -104,18 +104,47 @@ def read_power_file(file):
     return df
 
 def parse_weather_file(file):
-    """读取新的气象文件格式：record_time (2026/1/1 0:00:00), value"""
+    """
+    读取气象文件，新格式包含：record_time, value, city_name, weather_dimension
+    自动筛选 city_name='济南' 且 weather_dimension='气温' 的数据，然后按原格式返回
+    """
     if file.name.lower().endswith(".csv"):
         df = pd.read_csv(file)
     else:
         df = pd.read_excel(file)
+
+    # 统一列名去除空格
     df.columns = df.columns.str.strip()
-    if "record_time" not in df.columns or "value" not in df.columns:
-        raise ValueError("气象文件必须包含 'record_time' 和 'value' 列")
-    df["record_time"] = pd.to_datetime(df["record_time"], format="%Y/%m/%d %H:%M:%S")
+
+    # 必须包含的基础列
+    required_cols = ["record_time", "value"]
+    for col in required_cols:
+        if col not in df.columns:
+            raise ValueError(f"气象文件必须包含 '{col}' 列")
+
+    # 如果存在城市与维度列，则进行筛选
+    if "city_name" in df.columns and "weather_dimension" in df.columns:
+        # 筛选济南市的气温数据
+        mask = (df["city_name"].astype(str).str.strip() == "济南") & \
+               (df["weather_dimension"].astype(str).str.strip() == "气温")
+        df = df[mask].copy()
+        if df.empty:
+            st.warning("气象文件中未找到 city_name='济南' 且 weather_dimension='气温' 的数据，将尝试使用全部数据。")
+            # 若筛选后为空，则回退到原始数据（兼容旧格式）
+            df = pd.read_excel(file) if not file.name.lower().endswith(".csv") else pd.read_csv(file)
+    else:
+        # 旧格式文件，不做筛选
+        pass
+
+    # 解析时间
+    df["record_time"] = pd.to_datetime(df["record_time"], format="%Y/%m/%d %H:%M:%S", errors="coerce")
+    df = df.dropna(subset=["record_time"])
+
     df["date"] = df["record_time"].dt.normalize()
     df["hour"] = df["record_time"].dt.hour
     df = df.rename(columns={"value": "temperature"})
+
+    # 只保留需要的列
     return df[["date", "hour", "temperature"]]
 
 def split_weather_by_power_dates(df_weather, power_start_date, power_end_date):
